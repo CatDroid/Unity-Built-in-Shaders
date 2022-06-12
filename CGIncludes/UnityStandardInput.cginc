@@ -77,40 +77,53 @@ float4 TexCoords(VertexInput v)
     return texcoord;
 }
 
+// 对纹理采样  _DetailMask("Detail Mask", 2D) = "white" {} 
+// _DetailMask.a 只取alpha通道  作为线性插值的参数 
 half DetailMask(float2 uv)
 {
     return tex2D (_DetailMask, uv).a;
 }
 
+// 对 MainTex.rgb 采样 并且乘以参数_Color.rgb 并且和 DetailAlbedoMap.rgb 以 DetailMask.a 做混合 得到慢反射颜色
+// texcoords.xy   _MainTex
+// texcoords.wz   _DetailAlbedoMap
 half3 Albedo(float4 texcoords)
 {
     half3 albedo = _Color.rgb * tex2D (_MainTex, texcoords.xy).rgb;
+
 #if _DETAIL
     #if (SHADER_TARGET < 30)
-        // SM20: instruction count limitation
-        // SM20: no detail mask
+        // SM20: instruction count limitation   指令数目限制 
+        // SM20: no detail mask                 没有detialmask 
         half mask = 1;
     #else
+
+        // 采样 _DetailMask.a 
         half mask = DetailMask(texcoords.xy);
     #endif
+
+    // 采样 _DetailAlbedoMap.agb 
     half3 detailAlbedo = tex2D (_DetailAlbedoMap, texcoords.zw).rgb;
+
     #if _DETAIL_MULX2
         albedo *= LerpWhiteTo (detailAlbedo * unity_ColorSpaceDouble.rgb, mask);
     #elif _DETAIL_MUL
         albedo *= LerpWhiteTo (detailAlbedo, mask);
     #elif _DETAIL_ADD
-        albedo += detailAlbedo * mask;
+        albedo += detailAlbedo * mask; // 这样相当于 albedo * 1.0 + detailAlbedo * mask 
     #elif _DETAIL_LERP
-        albedo = lerp (albedo, detailAlbedo, mask);
+        albedo = lerp (albedo, detailAlbedo, mask); // 在MainTex.rgb * _Color.rgb 和 _DetailAlbedoMap.rgb 之间 用 百分比 _DetailMask.a(透明度) 插值
     #endif
 #endif
+
     return albedo;
 }
 
+// 如果光滑度使用了MainTex.a通道, 就只能返回固定的参数_Color.a 
 half Alpha(float2 uv)
 {
 #if defined(_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A)
-    return _Color.a;
+    return _Color.a; 
 #else
     return tex2D(_MainTex, uv).a * _Color.a;
 #endif
@@ -128,20 +141,42 @@ half Occlusion(float2 uv)
 #endif
 }
 
+// _GlossMapScale("Smoothness Factor", Range(0.0, 1.0)) = 1.0
+// [Enum(Specular Alpha,0,Albedo Alpha,1)] _SmoothnessTextureChannel ("Smoothness texture channel", Float) = 0
+// Specular Alpha(_SpecGlossMap.a)  还是  Albedo Alpha(_MainTex.a) 作为 光滑度的来源 
+// 返回 
+//    纹理方案: 
+//      高光反射率 specColor.rgb = _SpecGlossMap.rgb 
+//      光滑度    specColor.a   =  _MainTex.a *_GlossMapScale  或者 _SpecGlossMap.a *_GlossMapScale 
+//    无SpecGlossMap纹理
+//      高光反射率  specColor.rgb =  _SpecColor.rgb
+//      光滑度     specColor.a   = _MainTex.a *_GlossMapScale  或者 _Glossiness 
 half4 SpecularGloss(float2 uv)
 {
     half4 sg;
 #ifdef _SPECGLOSSMAP
-    #if defined(_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A)
-        sg.rgb = tex2D(_SpecGlossMap, uv).rgb;
-        sg.a = tex2D(_MainTex, uv).a;
+    #if defined(_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A) // ALBEDO_CHANNEL_A == _MainTex.a 
+
+        // _SpecGlossMap 只存储rgb  a通道存放的是albedo??
+        sg.rgb = tex2D(_SpecGlossMap, uv).rgb; 
+
+        // 光滑度 从 _MainTex a通道 获取  
+        sg.a = tex2D(_MainTex, uv).a;   
+
     #else
-        sg = tex2D(_SpecGlossMap, uv);
+
+        // _SpecGlossMap 存储了rgba 
+        sg = tex2D(_SpecGlossMap, uv); 
+
     #endif
-    sg.a *= _GlossMapScale;
+
+    sg.a *= _GlossMapScale; // a通道是光滑度  乘上  光滑度因子参数_GlossMapScale 得到最后的 光滑度 
+
 #else
-    sg.rgb = _SpecColor.rgb;
-    #ifdef _SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A
+
+    sg.rgb = _SpecColor.rgb;  // 如果没有SpecGlossMap 才会直接读参数_SpecColor 
+
+    #ifdef _SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A  
         sg.a = tex2D(_MainTex, uv).a * _GlossMapScale;
     #else
         sg.a = _Glossiness;
@@ -200,30 +235,46 @@ half3 Emission(float2 uv)
 }
 
 #ifdef _NORMALMAP
+// 使用NormalMap的情况
+
+// 从 BumpMap 和 _DetailNormapMap 中获取切线空间的法线
+// texcoords.xy  BumpMap 
+// texcoords.zw  _DetailNormapMap   这个跟 MainTex 和 DetalAlbedoMap 类似 
 half3 NormalInTangentSpace(float4 texcoords)
 {
-    half3 normalTangent = UnpackScaleNormal(tex2D (_BumpMap, texcoords.xy), _BumpScale);
+    // _BumpScale 缩放法线
+    half3 normalTangent = UnpackScaleNormal(tex2D (_BumpMap, texcoords.xy), _BumpScale); 
 
 #if _DETAIL && defined(UNITY_ENABLE_DETAIL_NORMALMAP)
+
+     // 插值 DetailMask.a 
     half mask = DetailMask(texcoords.xy);
+
+    // _DetailNormalMapScale 缩放法线 
     half3 detailNormalTangent = UnpackScaleNormal(tex2D (_DetailNormalMap, texcoords.zw), _DetailNormalMapScale);
+
     #if _DETAIL_LERP
+        // 在 BumpMap.xyz 和 BumpScaleMap.xyz 中 做线性插值 
         normalTangent = lerp(
             normalTangent,
             detailNormalTangent,
             mask);
+
     #else
+
         normalTangent = lerp(
             normalTangent,
             BlendNormals(normalTangent, detailNormalTangent),
             mask);
     #endif
+
 #endif
 
     return normalTangent;
 }
 #endif
 
+// _ParallaxMap ???视差??  这个是什么 会修改纹理坐标 ?? 
 float4 Parallax (float4 texcoords, half3 viewDir)
 {
 #if !defined(_PARALLAXMAP) || (SHADER_TARGET < 30)

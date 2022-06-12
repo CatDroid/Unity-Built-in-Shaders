@@ -20,7 +20,7 @@
     #elif defined(UNITY_PBS_USE_BRDF2)
         #define UNITY_BRDF_PBS BRDF2_Unity_PBS
     #elif defined(UNITY_PBS_USE_BRDF1)
-        #define UNITY_BRDF_PBS BRDF1_Unity_PBS
+        #define UNITY_BRDF_PBS BRDF1_Unity_PBS // ?? 不同版本的PBS实现 ?? 
     #else
         #error something broke in auto-choosing BRDF
     #endif

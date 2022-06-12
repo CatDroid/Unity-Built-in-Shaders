@@ -14,10 +14,13 @@
 
 #include "AutoLight.cginc"
 //-------------------------------------------------------------------------------------
-// counterpart for NormalizePerPixelNormal
+// counterpart for NormalizePerPixelNormal  
 // skips normalization per-vertex and expects normalization to happen per-pixel
 half3 NormalizePerVertexNormal (float3 n) // takes float to avoid overflow
 {
+    // 对于ST <  3.0 逐顶点对法线归一化 
+    // 对于ST >= 3.0 逐像素对法线归一化
+
     #if (SHADER_TARGET < 30) || UNITY_STANDARD_SIMPLE
         return normalize(n);
     #else
@@ -25,12 +28,13 @@ half3 NormalizePerVertexNormal (float3 n) // takes float to avoid overflow
     #endif
 }
 
+// 只是根据是否ST<3.0来归一化向量  
 float3 NormalizePerPixelNormal (float3 n)
 {
     #if (SHADER_TARGET < 30) || UNITY_STANDARD_SIMPLE
         return n;
     #else
-        return normalize((float3)n); // takes float to avoid overflow
+        return normalize((float3)n); // takes float to avoid overflow ??采取float以避免溢出??
     #endif
 }
 
@@ -112,6 +116,9 @@ half3 WorldNormal(half4 tan2world[3])
     }
 #endif
 
+
+// 直接返回 tangentToWorld[2].xyz 作为法线 
+// 或者 从 BumpMap和DetailNormalMap中 获取切向空间的法线 转换到 世界坐标系返回 
 float3 PerPixelWorldNormal(float4 i_tex, float4 tangentToWorld[3])
 {
 #ifdef _NORMALMAP
@@ -122,22 +129,27 @@ float3 PerPixelWorldNormal(float4 i_tex, float4 tangentToWorld[3])
     #if UNITY_TANGENT_ORTHONORMALIZE
         normal = NormalizePerPixelNormal(normal);
 
-        // ortho-normalize Tangent
+        // ortho-normalize Tangent  斯密特正交化  ??? 为什么要做这个的 ??? 
         tangent = normalize (tangent - normal * dot(tangent, normal));
 
         // recalculate Binormal
         half3 newB = cross(normal, tangent);
-        binormal = newB * sign (dot (newB, binormal));
+        binormal = newB * sign (dot (newB, binormal)); // 保存前后的副切线是同向的 
     #endif
 
+    // 从BumpMap和DetailNormalMap中获取法线 
     half3 normalTangent = NormalInTangentSpace(i_tex);
+
+    // 法线切换到世界坐标系下，并且传入 NormalizePerPixelNormal 做归一化
     float3 normalWorld = NormalizePerPixelNormal(tangent * normalTangent.x + binormal * normalTangent.y + normal * normalTangent.z); // @TODO: see if we can squeeze this normalize on SM2.0 as well
 #else
+    // 只是把 法线 tangentToWorld[2] 归一化了 
     float3 normalWorld = normalize(tangentToWorld[2].xyz);
 #endif
     return normalWorld;
 }
 
+// IN_VIEWDIR4PARALLAX 有些情况 视角方向 保存在 i.tangentToWorldAndPackedData[0] (??跟顶点坐标冲突??) 或者没有 half3(0,0,0)
 #ifdef _PARALLAXMAP
     #define IN_VIEWDIR4PARALLAX(i) NormalizePerPixelNormal(half3(i.tangentToWorldAndPackedData[0].w,i.tangentToWorldAndPackedData[1].w,i.tangentToWorldAndPackedData[2].w))
     #define IN_VIEWDIR4PARALLAX_FWDADD(i) NormalizePerPixelNormal(i.viewDirForParallax.xyz)
@@ -146,6 +158,7 @@ float3 PerPixelWorldNormal(float4 i_tex, float4 tangentToWorld[3])
     #define IN_VIEWDIR4PARALLAX_FWDADD(i) half3(0,0,0)
 #endif
 
+// IN_WORLDPOS 有些情况 顶点的世界坐标保存在 i.tangentToWorldAndPackedData 或者 i.posWorld
 #if UNITY_REQUIRE_FRAG_WORLDPOS
     #if UNITY_PACK_WORLDPOS_WITH_TANGENT
         #define IN_WORLDPOS(i) half3(i.tangentToWorldAndPackedData[0].w,i.tangentToWorldAndPackedData[1].w,i.tangentToWorldAndPackedData[2].w)
@@ -190,17 +203,27 @@ struct FragmentCommonData
     #define UNITY_SETUP_BRDF_INPUT SpecularSetup
 #endif
 
+ // 基于高光工作流的StandardSpecular.shader  PBS参数设置
 inline FragmentCommonData SpecularSetup (float4 i_tex)
 {
-    half4 specGloss = SpecularGloss(i_tex.xy);
-    half3 specColor = specGloss.rgb;
-    half smoothness = specGloss.a;
+    // UnityStandardInput.cginc  
+    // 高光反射率 specColor.rgb = _SpecGlossMap.rgb   
+    // 光滑度    specColor.a   =  _MainTex.a *_GlossMapScale  或者 _SpecGlossMap.a *_GlossMapScale 
+    half4 specGloss = SpecularGloss(i_tex.xy);  
 
+    half3 specColor = specGloss.rgb;  // 高光颜色 SpecGlossMap采样 或者 SpecColor参数
+    half smoothness = specGloss.a;   // 光滑度 已经乘以 _GlossMapScale  SpecGloosMap.a/MainTex.a(纹理采样方式) 或者 SpecColor.a(参数方式,这样所有点都一样高光颜色)
+
+    // 计算 一减反射率   
     half oneMinusReflectivity;
+
+    // 漫反射 和 镜面反射 之间的能量守恒  UnityStandardUtils.cginc 
+    // diffColor = albedo*( 1.0 - 高光放射率specColor)      矢量
+    // oneMinusReflectivity = 1 - max(高光放射率specColor)  标量  可认为是慢反射率?? 
     half3 diffColor = EnergyConservationBetweenDiffuseAndSpecular (Albedo(i_tex), specColor, /*out*/ oneMinusReflectivity);
 
     FragmentCommonData o = (FragmentCommonData)0;
-    o.diffColor = diffColor;
+    o.diffColor = diffColor; // 对 MainTex.rgb采样 并且乘以参数_Color.rgb (若存在Detail的话)并且和 DetailAlbedoMap.rgb 以 DetailMask.a 做混合 得到慢反射颜色
     o.specColor = specColor;
     o.oneMinusReflectivity = oneMinusReflectivity;
     o.smoothness = smoothness;
@@ -227,6 +250,7 @@ inline FragmentCommonData RoughnessSetup(float4 i_tex)
 
 inline FragmentCommonData MetallicSetup (float4 i_tex)
 {
+    // 基于金属工作流的Standard.Shader 
     half2 metallicGloss = MetallicGloss(i_tex.xy);
     half metallic = metallicGloss.x;
     half smoothness = metallicGloss.y; // this is 1 minus the square root of real roughness m.
@@ -243,21 +267,39 @@ inline FragmentCommonData MetallicSetup (float4 i_tex)
     return o;
 }
 
+// (parallax)视差(transformed)变换 的 texcoord 用于 采样遮挡
 // parallax transformed texcoord is used to sample occlusion
 inline FragmentCommonData FragmentSetup (inout float4 i_tex, float3 i_eyeVec, half3 i_viewDirForParallax, float4 tangentToWorld[3], float3 i_posWorld)
 {
     i_tex = Parallax(i_tex, i_viewDirForParallax);
 
+    // MainTex.a or _Color.a  UnityStandardInput.cginc 
     half alpha = Alpha(i_tex.xy);
+
+    // 透明度测试 
     #if defined(_ALPHATEST_ON)
+        // 
+        // 如果一个片元的透明的(alpha值，a值）不满足条件（通常是小于某个阈值），则它对应的片元就会被舍弃，
+        // 而且被舍弃的片元对颜色缓冲区不产生任何影响 
+        // 否则则会被当成正常不透明物体来处理 
+        // 
+        // 这里是做了减法 aplha-_Cutoff 
         clip (alpha - _Cutoff);
     #endif
 
+    //  MetallicSetup 或者 SpecularSetup 为BRDF准备好参数保存到 FragmentCommonData 
     FragmentCommonData o = UNITY_SETUP_BRDF_INPUT (i_tex);
-    o.normalWorld = PerPixelWorldNormal(i_tex, tangentToWorld);
+
+    // 从BumpMap和DetialNormalMap中获取切线 或者直接用 tangentToWorld[3]作为法线 
+    o.normalWorld = PerPixelWorldNormal(i_tex, tangentToWorld); 
+
+    // 归一化视线 
     o.eyeVec = NormalizePerPixelNormal(i_eyeVec);
+
+    // 顶点的世界坐标 
     o.posWorld = i_posWorld;
 
+    // PreMultiplyAlpha ?? 没理解怎么作用 ?? 
     // NOTE: shader relies on pre-multiply alpha-blend (_SrcBlend = One, _DstBlend = OneMinusSrcAlpha)
     o.diffColor = PreMultiplyAlpha (o.diffColor, alpha, o.oneMinusReflectivity, /*out*/ o.alpha);
     return o;
@@ -429,22 +471,33 @@ half4 fragForwardBaseInternal (VertexOutputForwardBase i)
 {
     UNITY_APPLY_DITHER_CROSSFADE(i.pos.xy);
 
+    // 填充BRD的输入结构体 FragmentCommonData 
     FRAGMENT_SETUP(s)
 
     UNITY_SETUP_INSTANCE_ID(i);
     UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(i);
 
     UnityLight mainLight = MainLight ();
+    // 计算光衰减
     UNITY_LIGHT_ATTENUATION(atten, i, s.posWorld);
 
+    // 计算遮挡
     half occlusion = Occlusion(i.tex.xy);
+
+    // 全局光照 
     UnityGI gi = FragmentGI (s, occlusion, i.ambientOrLightmapUV, atten, mainLight);
 
+    // 计算PBS UnityPBSLighting.cginc 
     half4 c = UNITY_BRDF_PBS (s.diffColor, s.specColor, s.oneMinusReflectivity, s.smoothness, s.normalWorld, -s.eyeVec, gi.light, gi.indirect);
+    
+    // 加上自发光
     c.rgb += Emission(i.tex.xy);
 
+    // 添加雾效模拟 
     UNITY_EXTRACT_FOG_FROM_EYE_VEC(i);
     UNITY_APPLY_FOG(_unity_fogCoord, c.rgb);
+
+    // 最后像素值
     return OutputForward (c, s.alpha);
 }
 

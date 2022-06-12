@@ -8,11 +8,12 @@
 
 // Helper functions, maybe move into UnityCG.cginc
 
+// 高光强度 直接取 传入的specular.r 或者 max(specular.r, specular.g, specular.b); 
 half SpecularStrength(half3 specular)
 {
     #if (SHADER_TARGET < 30)
-        // SM2.0: instruction count limitation
-        // SM2.0: simplified SpecularStrength
+        // SM2.0: instruction count limitation  指令数目限制 
+        // SM2.0: simplified SpecularStrength   简化的镜面强度
         return specular.r; // Red channel - because most metals are either monocrhome or with redish/yellowish tint
     #else
         return max (max (specular.r, specular.g), specular.b);
@@ -22,13 +23,24 @@ half SpecularStrength(half3 specular)
 // Diffuse/Spec Energy conservation
 inline half3 EnergyConservationBetweenDiffuseAndSpecular (half3 albedo, half3 specColor, out half oneMinusReflectivity)
 {
-    oneMinusReflectivity = 1 - SpecularStrength(specColor);
-    #if !UNITY_CONSERVE_ENERGY
+
+     // 传入的这个specColor会作为高光反射BRDF的菲涅尔项F0  
+     
+     // F0 + (1-F0)( 1 - l*h)^5  
+     // F0 = 1. 对于导体(金属)来说这个值接近1  对于电介质(非金属)来说这个值接近0(高光反射不明显)
+     //      2. 对于导体(金属) 三个分量是不一样的 
+     //      3. ??SpecColor高光反射率?? 
+
+    oneMinusReflectivity = 1 - SpecularStrength(specColor); // 这个是标量 
+
+    #if !UNITY_CONSERVE_ENERGY  // 没有定义unity转换能量?? 
         return albedo;
     #elif UNITY_CONSERVE_ENERGY_MONOCHROME
         return albedo * oneMinusReflectivity;
     #else
-        return albedo * (half3(1,1,1) - specColor);
+        return albedo * (half3(1,1,1) - specColor); 
+        // albedo * (1.0-specColor.r, 1.0-specColor.g, 1.0-specColor.b)
+        // albedo * (1.0 - 高光反射率)   ?? 可以看做慢反射率 ??
     #endif
 }
 
@@ -53,9 +65,10 @@ inline half3 DiffuseAndSpecularFromMetallic (half3 albedo, half metallic, out ha
 inline half3 PreMultiplyAlpha (half3 diffColor, half alpha, half oneMinusReflectivity, out half outModifiedAlpha)
 {
     #if defined(_ALPHAPREMULTIPLY_ON)
+        // 已经预乘了 所以混合应该是  src = 1   dst = 1-alpha 
         // NOTE: shader relies on pre-multiply alpha-blend (_SrcBlend = One, _DstBlend = OneMinusSrcAlpha)
 
-        // Transparency 'removes' from Diffuse component
+        // Transparency 'removes' from Diffuse component  ??? 这个怎么理解 ??? 
         diffColor *= alpha;
 
         #if (SHADER_TARGET < 30)
@@ -91,9 +104,12 @@ half LerpOneTo(half b, half t)
     return oneMinusT + b * t;
 }
 
+// 线性插值，从白色(t=0)到b(t=1)
+// Lerp From White To b 
+//  (1.0, 1.0, 1.0) * ( 1 - t ) + b * t  如果t为1 那么返回就是b 
 half3 LerpWhiteTo(half3 b, half t)
 {
-    half oneMinusT = 1 - t;
+    half oneMinusT = 1 - t; 
     return half3(oneMinusT, oneMinusT, oneMinusT) + b * t;
 }
 
@@ -110,18 +126,19 @@ half3 UnpackScaleNormalDXT5nm(half4 packednormal, half bumpScale)
     return normal;
 }
 
+// 法线xy保存在RG 还是 AG
 half3 UnpackScaleNormalRGorAG(half4 packednormal, half bumpScale)
 {
-    #if defined(UNITY_NO_DXT5nm)
+    #if defined(UNITY_NO_DXT5nm)  // 没有使用DXT5nm压缩 纹理保存法线的xyz 
         half3 normal = packednormal.xyz * 2 - 1;
         #if (SHADER_TARGET >= 30)
-            // SM2.0: instruction count limitation
-            // SM2.0: normal scaler is not supported
+            // SM2.0: instruction count limitation    指令数目限制
+            // SM2.0: normal scaler is not supported  不支持法线Scaler???
             normal.xy *= bumpScale;
         #endif
         return normal;
     #else
-        // This do the trick
+        // This do the trick  DXT5nm W存放x Y存放y  R5-G6-B5-A8 并且没有存放z 
         packednormal.x *= packednormal.w;
 
         half3 normal;

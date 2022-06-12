@@ -47,7 +47,19 @@ Shader "Standard (Specular setup)"
     }
 
     CGINCLUDE
-        #define UNITY_SETUP_BRDF_INPUT SpecularSetup
+        #define UNITY_SETUP_BRDF_INPUT SpecularSetup 
+        // 注意这里 宏定义了 BRDF输入参数的处理方式/来源方式, 
+        // 后面 CGPROGRAM 会  #include "UnityStandardCoreForward.cginc"
+        // StandsardSpecular.shader(高光反射工作流) 和  Standard.shader(金属工作流) 这个宏定义是不一样的
+
+        // CGINCLUDE 
+        // CGPROGRAM 
+        // 1. CGINCLUDE，不注意的话很可能会和CGPROGRAM 搞混淆，虽然这两个关键字都需要ENDCG 来结束生效范围
+        // 2. 在 CGINCLUDE 和 ENDCG 范围内可以插入一些shader代码，比如变量声明，结构体定义，函数实现
+        // 3. unity会把 CGINCLUDE 和 ENDCG 之间的代码插入到每一个pass中，已达到声明一遍，多次使用的目的。
+        //    （参考）例如，可以在 CGINCLUDE 和 ENDCG 之间 定义多个 顶点和片段方法，
+        //     在pass里只要写明 #pragma vertex 顶点方法名 #pragma fragment 片段方法名 即可，而不用写具体的函数实现
+        // 
     ENDCG
 
     SubShader

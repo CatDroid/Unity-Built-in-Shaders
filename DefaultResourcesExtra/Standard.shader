@@ -48,7 +48,11 @@ Shader "Standard"
     }
 
     CGINCLUDE
-        #define UNITY_SETUP_BRDF_INPUT MetallicSetup
+        #define UNITY_SETUP_BRDF_INPUT MetallicSetup 
+        // 注意这里 宏定义了 BRDF输入参数的处理方式/来源方式, 
+        // 后面 CGPROGRAM 会  #include "UnityStandardCoreForward.cginc"
+        // StandsardSpecular.shader(高光反射工作流) 和  Standard.shader(金属工作流) 这个宏定义是不一样的
+
     ENDCG
 
     SubShader
